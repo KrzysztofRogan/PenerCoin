@@ -14,7 +14,7 @@ class Node:
         self.on_transaction = None
 
     async def start_server(self):
-        async def handler(ws, path):
+        async def handler(ws):  
             self.connections.add(ws)
             try:
                 async for msg in ws:
@@ -86,7 +86,6 @@ class Node:
 
 async def main():
     if len(sys.argv) < 2:
-        print("Użycie: python node.py <port> [peer1] [peer2] ...")
         sys.exit(1)
 
     port = int(sys.argv[1])
@@ -102,10 +101,10 @@ async def main():
     await node.run()
 
     print(f"[Node:{port}] Running. Known peers: {peers}")
-    print("Możesz teraz wysyłać transakcje z innego węzła lub demo.py.")
-    await asyncio.Future()  # keep running forever
+    await asyncio.Future() 
 
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
