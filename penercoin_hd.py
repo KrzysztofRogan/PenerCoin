@@ -102,6 +102,13 @@ class HDWallet:
     def get_public_key_compressed_hex(self, path: str) -> str:
         pubc = _point_from_priv(self.get_private_key_bytes(path))
         return binascii.hexlify(pubc).decode()
+    
+    def get_public_key_uncompressed_hex(self, path: str) -> str:
+        """Zwraca 64-bajtowy (nieskompresowany) klucz publiczny w formacie hex."""
+        priv_bytes = self.get_private_key_bytes(path)
+        sk = SigningKey.from_string(priv_bytes, curve=SECP256k1)
+        vk = sk.get_verifying_key()
+        return binascii.hexlify(vk.to_string()).decode()
 
     def get_address(self, path: str) -> str:
         pubc = _point_from_priv(self.get_private_key_bytes(path))
