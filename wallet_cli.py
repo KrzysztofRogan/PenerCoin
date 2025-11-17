@@ -10,7 +10,7 @@ from penercoin_hd import HDWallet
 
 PASSWORD = "notsecret!"
 KEYSTORE_PATH = "my_wallet.json"
-DEFAULT_NODE_URL = "ws://localhost:8765" # Domyślny węzeł, do którego wysyłamy transakcje
+DEFAULT_NODE_URL = "ws://localhost:8765" #domyslny wezel do wysylania transakcji z portfela
 
 def get_wallet() -> HDWallet:
     """Wczytuje portfel z pliku lub tworzy nowy, jeśli nie istnieje."""
@@ -35,11 +35,11 @@ def get_wallet() -> HDWallet:
 async def send_transaction(wallet: HDWallet, node_url: str, recipient: str, amount: int):
     """Tworzy, podpisuje i wysyła transakcję do węzła."""
     
-    # Użyjmy pierwszego adresu jako nadawcy
+    # pierwszy adres jako adres nadawcy
     sender_path = "m/0/0"
     sender_address = wallet.get_address(sender_path)
     
-    # 1. Przygotuj dane transakcji
+    # przygotowanie danych transakcji
     tx_data = {
         "from": sender_address,
         "to": recipient,
@@ -47,25 +47,24 @@ async def send_transaction(wallet: HDWallet, node_url: str, recipient: str, amou
         "timestamp": time.time()
     }
     
-    # 2. Oblicz hash danych transakcji (to jest "wiadomość" do podpisania)
+    # obliczanie hasha z danych transakcji
     tx_string = json.dumps(tx_data, sort_keys=True)
     tx_hash_bytes = hashlib.sha256(tx_string.encode()).digest()
     
-    # 3. Podpisz hash kluczem prywatnym
+    # podpisanie hasha kluczem prywatnym
     signature_hex = wallet.sign_with_path(sender_path, tx_hash_bytes)
     
-    # 4. Zdobądź klucz publiczny do weryfikacji
-    # Musimy wysłać nieskompresowany klucz, aby węzły mogły go zweryfikować
+    # weryfikacja kluczem publicznym - nieskompresowanym
     pubkey_uncompressed_hex = wallet.get_public_key_uncompressed_hex(sender_path)
     
-    # 5. Skompletuj pełną transakcję
+    # cały payload transakcji
     full_tx_payload = {
         "tx_data": tx_data,
         "signature": signature_hex,
         "sender_pubkey": pubkey_uncompressed_hex
     }
     
-    # 6. Przygotuj wiadomość dla węzła P2P
+    # wiadomosc dla wezla - informacja o typie wiadomosci i dane
     message = json.dumps({"type": "TRANSACTION", "data": full_tx_payload})
 
     print(f"\n[Wallet] Connecting to node {node_url}...")

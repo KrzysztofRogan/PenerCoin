@@ -5,19 +5,15 @@ import json
 import sys
 import time
 
-# Importujemy naszą logikę blockchain
 from blockchain import Blockchain, Transaction, Block
 from typing import List, Dict, Any, Optional
 
-## NOWOŚĆ: Importujemy Flask i Threading
-from flask import Flask, jsonify
+from flask import Flask, jsonify # flask do zarzadzania po api na porcie o 1000 wyzszym niz websocker
 from threading import Thread
 import logging
 
-## NOWOŚĆ: Funkcja pomocnicza do uruchomienia Flaska w wątku
 def run_flask_app(app, port):
     """Uruchamia serwer Flask na podanym porcie."""
-    # Wyłączamy domyślne logowanie Flaska, aby nie zaśmiecać konsoli węzła
     log = logging.getLogger('werkzeug')
     log.setLevel(logging.ERROR)
     
@@ -33,22 +29,19 @@ class Node:
         self.connections = set()
         self.known_peers = set(self.peers)
         
-        # Każdy węzeł ma własną kopię łańcucha bloków
+        # własna kopia chaina przechowywana w węźle
         self.blockchain = Blockchain()
-        
-        # Logika górnika
+        #
         self.is_miner = is_miner
         self.miner_address = miner_address
         if self.is_miner and not self.miner_address:
             print("[Node] Miner node must be started with a miner_address.")
             sys.exit(1)
         
-        ## NOWOŚĆ: Tworzymy instancję aplikacji Flask
         self.flask_app = self.create_flask_app()
         
         print(f"[Node:{self.port}] Initialized. Miner: {self.is_miner}")
 
-    ## NOWOŚĆ: Metoda tworząca aplikację Flask i jej endpointy
     def create_flask_app(self):
         app = Flask(__name__)
 
@@ -82,9 +75,8 @@ class Node:
     async def start_server(self):
         async def handler(ws):
             self.connections.add(ws)
-            # print(f"[Node:{self.port}] New connection from {ws.remote_address}") # Mniej "hałasu"
             try:
-                # Przy nowym połączeniu, wyślijmy mu nasz łańcuch
+                # wysłanie łancucha przy nowym połączeniu
                 await self.send_chain(ws)
                 
                 async for msg in ws:
@@ -104,10 +96,10 @@ class Node:
             try:
                 ws = await websockets.connect(p)
                 self.connections.add(ws)
-                # Uruchom pętlę odbioru dla tego połączenia
+                # pętla do odbioru połączenia
                 asyncio.create_task(self.receive_loop(ws))
                 print(f"[Node:{self.port}] Połączono z peerem {p}")
-                # Poproś o łańcuch od peera, do którego się łączysz
+                # pyta nowego peera o łańcuch
                 await ws.send(json.dumps({"type": "GET_CHAIN"}))
             except Exception as e:
                 print(f"[Node:{self.port}] Nie można połączyć z {p}: {e}")
@@ -137,13 +129,13 @@ class Node:
 
         if t == "TRANSACTION":
             try:
-                # Sprawdźmy, czy już mamy tę transakcję
+                # sprawdzenie czy wezel juz ma te transakcje
                 tx = Transaction.from_dict(data)
                 if tx.tx_hash in [t.tx_hash for t in self.blockchain.pending_transactions]:
-                    return # Już ją mamy, ignoruj
+                    return 
                     
                 if self.blockchain.add_transaction(tx):
-                    # Transakcja jest poprawna, rozgłoś ją dalej
+                    # poprawna transakcja - rozglaszanie dalej
                     await self.broadcast(raw_msg, exclude=ws)
             except Exception as e:
                 print(f"[Node:{self.port}] Błąd przetwarzania TRANSAKCJI: {e}")
@@ -151,22 +143,22 @@ class Node:
         elif t == "NEW_BLOCK":
             try:
                 block = Block.from_dict(data)
-                # Sprawdź, czy już mamy ten blok
+                # sprawdzenie czy mamy ten blok
                 if block.hash == self.blockchain.get_latest_block().hash:
-                    return # Już go mamy
+                    return 
                 
                 if self.blockchain.add_block(block):
-                    # Blok jest poprawny, rozgłoś go dalej
+                    # rozglaszanie poprawnego bloku
                     await self.broadcast(raw_msg, exclude=ws)
             except Exception as e:
                 print(f"[Node:{self.port}] Błąd przetwarzania NOWEGO BLOKU: {e}")
         
         elif t == "GET_CHAIN":
-            # Ktoś prosi o nasz łańcuch
+            # ktos prosi o lancuch - wysylamy
             await self.send_chain(ws)
             
         elif t == "CHAIN":
-            # Otrzymaliśmy pełny łańcuch od peera
+            # otrzymanie pelnego lancucha od peera
             self.handle_received_chain(data)
 
         elif t == "PING":
@@ -227,25 +219,25 @@ class Node:
             
         print(f"[Node:{self.port}] Otrzymano dłuższy łańcuch. Weryfikacja...")
         
-        # Tworzymy tymczasowy, testowy łańcuch
+        # testowy lancuch
         temp_blockchain = Blockchain()
-        temp_blockchain.chain = [] # Usuwamy genesis block
+        temp_blockchain.chain = [] # usuniecie genesis blocku
         
         try:
             for i, block_data in enumerate(chain_data):
                 block = Block.from_dict(block_data)
                 
                 if i == 0:
-                    # Weryfikacja Genesis Block
+                    # sprawdzenie genesis bloku
                     if block.index != 0 or block.previous_hash != "0":
                         raise ValueError("Invalid Genesis Block")
                     temp_blockchain.chain.append(block)
                 else:
-                    # Weryfikacja kolejnych bloków
+                    # weryfikacja dalszych blokow
                     if not temp_blockchain.add_block(block):
                         raise ValueError(f"Niepoprawny blok #{block.index} w otrzymanym łańcuchu.")
             
-            # Jeśli cały łańcuch jest poprawny, zastępujemy nasz
+            # zastapienie lancucha dluzszym nowym jesli jest poprawny
             self.blockchain = temp_blockchain
             print(f"[Node:{self.port}] Zamieniono lokalny łańcuch na nowy, poprawny. Długość: {len(self.blockchain.chain)}")
             
@@ -255,21 +247,19 @@ class Node:
 
     async def run(self):
         await self.start_server()
-        await asyncio.sleep(0.5) # Daj serwerowi chwilę na start
+        await asyncio.sleep(0.5) # wstrzymujemy serwer na chwile
         await self.connect_to_peers()
         
         if self.is_miner:
-            # Uruchom pętlę górnika jako zadanie w tle
+            # petla gornika w tle
             asyncio.create_task(self.miner_loop())
             
-        ## NOWOŚĆ: Uruchomienie API Flaska w osobnym wątku
-        # Użyjemy portu o 1000 wyższego niż port P2P (np. 8765 -> 9765)
         api_port = self.port + 1000
         
         api_thread = Thread(
             target=run_flask_app, 
             args=(self.flask_app, api_port), 
-            daemon=True  # Ustawienie na True sprawi, że wątek zamknie się wraz z programem
+            daemon=True  # watek zamyka sie razem z programem
         )
         api_thread.start()
 
@@ -303,7 +293,7 @@ async def main():
     await node.run()
 
     print(f"[Node:{port}] Uruchomiony. Znani peerzy: {peers}")
-    await asyncio.Future()  # Trzymaj program przy życiu
+    await asyncio.Future()
 
 
 if __name__ == "__main__":
