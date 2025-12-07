@@ -214,6 +214,10 @@ class Blockchain:
             computed_hash = block.calculate_hash()
             
         return computed_hash
+    
+    def valide_block_transaction(self, block: Block, transac):
+        
+        return True
 
     def add_block(self, new_block: Block) -> bool:
         latest_block = self.get_latest_block()
@@ -223,8 +227,12 @@ class Blockchain:
         if new_block.previous_hash != latest_block.hash: return False
         if not new_block.hash.startswith(prefix): return False
         if new_block.hash != new_block.calculate_hash(): return False
+
+        # dodac osobna weryfikacje pierwszej transakcji w bloku zeby sprawdzic czy to coinbase (from coinbase i amount zeby sie zgadzal z hardcodowanym)
+
+        # dodac ochrone double spending - czy brac pod uwage mempool i czy to osobna ochrona
             
-        # Weryfikacja transakcji w bloku
+        # Weryfikacja transakcji w bloku - DODAĆ PEŁNĄ WALIDACJE COINBASE ETC.
         for tx in new_block.transactions:
             if not tx.is_valid():
                 return False
@@ -251,7 +259,6 @@ class Blockchain:
             for i, block_data in enumerate(chain_data):
                 block = Block.from_dict(block_data)
                 
-                # Walidacja Genesis Block
                 if i == 0:
                     our_genesis = self.create_genesis_block()
                     if block.calculate_hash() != our_genesis.calculate_hash():
@@ -259,7 +266,6 @@ class Blockchain:
                     temp_chain.append(block)
                     continue
 
-                # Walidacja reszty
                 prev_block = temp_chain[-1]
                 if block.previous_hash != prev_block.hash:
                     raise ValueError(f"Invalid link at block {i}")
@@ -293,3 +299,18 @@ class Blockchain:
             if current.hash != current.calculate_hash(): return False
             if current.previous_hash != prev.hash: return False
         return True
+    
+
+    # TO DO:
+    # do sprawdzenia:
+    # czy pierwsza transakcja to coinbase
+    # osobna funkcja walidacji coinbase transactions[0] czy from coinbase czy brak pubkey i signature czy amount sie zgadza
+    # weryfikacja wszystkich kolejych transakcji:
+    # struktura transakcji, czy ma wszystkie pola w odpowiedniej kolejnosci
+    # czy amount jest dodatnie i calkowite
+    # kryptografia.- sprawdzenie podpisu i pubkey za pomoca funkcji z portfela
+    # czy klub publiczny sie zgadza z adresem
+    # czy ta transakcja nie jest duplikatem (sprawdzenie hash czy juz istneije)
+    # double spending - specjalna funkcja do uruchomienia w addblock??? ktora policzy wszystkie from i to dla adresow transakcji i sprawdzi czy stac na nowa transakcje
+
+    # penerkowy albo dynamiczny proof of work
