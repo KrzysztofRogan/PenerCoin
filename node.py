@@ -3,20 +3,16 @@ import asyncio
 import websockets
 import json
 import sys
-import time
-
-from blockchain import Blockchain, Transaction, Block
-from typing import List, Dict, Any, Optional
-
-from flask import Flask, jsonify # flask do zarzadzania po api na porcie o 1000 wyzszym niz websocker
 from threading import Thread
 import logging
+
+from flask import Flask, jsonify
+from blockchain import Blockchain, Transaction, Block
 
 def run_flask_app(app, port):
     """Uruchamia serwer Flask na podanym porcie."""
     log = logging.getLogger('werkzeug')
     log.setLevel(logging.ERROR)
-    
     print(f"[API] Serwer HTTP API uruchomiony na http://localhost:{port}")
     app.run(host="0.0.0.0", port=port)
 
@@ -27,11 +23,10 @@ class Node:
         self.peers = peers or []
         self.server = None
         self.connections = set()
-        self.known_peers = set(self.peers)
         
-        # własna kopia chaina przechowywana w węźle
+        # Inicjalizacja Blockchaina (cała logika jest wewnątrz)
         self.blockchain = Blockchain()
-        #
+        
         self.is_miner = is_miner
         self.miner_address = miner_address
         if self.is_miner and not self.miner_address:
@@ -39,7 +34,6 @@ class Node:
             sys.exit(1)
         
         self.flask_app = self.create_flask_app()
-        
         print(f"[Node:{self.port}] Initialized. Miner: {self.is_miner}")
 
     def create_flask_app(self):
@@ -47,8 +41,7 @@ class Node:
 
         @app.route('/chain', methods=['GET'])
         def get_chain():
-            """Zwraca cały łańcuch bloków węzła w formacie JSON."""
-            chain_data = [block.to_dict() for block in self.blockchain.chain]
+            chain_data = self.blockchain.get_chain_dict()
             return jsonify({
                 "length": len(chain_data),
                 "chain": chain_data
@@ -56,18 +49,23 @@ class Node:
 
         @app.route('/mempool', methods=['GET'])
         def get_mempool():
-            """Zwraca listę transakcji oczekujących na wykopanie."""
-            tx_data = [tx.to_dict() for tx in self.blockchain.pending_transactions]
-            return jsonify(tx_data)
+            return jsonify(self.blockchain.get_pending_tx_dict())
             
         @app.route('/status', methods=['GET'])
         def get_status():
-            """Zwraca podstawowy status węzła."""
             return jsonify({
                 "port": self.port,
                 "is_miner": self.is_miner,
                 "block_height": self.blockchain.get_latest_block().index,
                 "peers_connected": len(self.connections)
+            })
+
+        @app.route('/balance/<address>', methods=['GET'])
+        def get_balance_endpoint(address):
+            balance = self.blockchain.get_balance(address)
+            return jsonify({
+                "address": address,
+                "balance": balance
             })
             
         return app
@@ -76,13 +74,10 @@ class Node:
         async def handler(ws):
             self.connections.add(ws)
             try:
-                # wysłanie łancucha przy nowym połączeniu
                 await self.send_chain(ws)
-                
                 async for msg in ws:
                     await self.handle_message(ws, msg)
             except websockets.ConnectionClosed:
-                # print(f"[Node:{self.port}] Connection closed from {ws.remote_address}")
                 pass
             finally:
                 if ws in self.connections:
@@ -96,21 +91,17 @@ class Node:
             try:
                 ws = await websockets.connect(p)
                 self.connections.add(ws)
-                # pętla do odbioru połączenia
                 asyncio.create_task(self.receive_loop(ws))
                 print(f"[Node:{self.port}] Połączono z peerem {p}")
-                # pyta nowego peera o łańcuch
                 await ws.send(json.dumps({"type": "GET_CHAIN"}))
             except Exception as e:
                 print(f"[Node:{self.port}] Nie można połączyć z {p}: {e}")
 
     async def receive_loop(self, ws):
-        """Pętla do odbierania wiadomości od peerów, z którymi się połączyliśmy."""
         try:
             async for msg in ws:
                 await self.handle_message(ws, msg)
         except websockets.ConnectionClosed:
-            # print(f"[Node:{self.port}] Utracono połączenie z peerem")
             pass
         finally:
             if ws in self.connections:
@@ -120,73 +111,55 @@ class Node:
         try:
             msg = json.loads(raw_msg)
         except Exception:
-            print(f"[Node:{self.port}] Otrzymano niepoprawny JSON.")
             return
 
         t = msg.get("type")
         data = msg.get("data")
-        # print(f"[Node:{self.port}] Received message type: {t}")
 
         if t == "TRANSACTION":
             try:
-                # sprawdzenie czy wezel juz ma te transakcje
                 tx = Transaction.from_dict(data)
-                if tx.tx_hash in [t.tx_hash for t in self.blockchain.pending_transactions]:
-                    return 
-                    
+                # Node tylko przekazuje do blockchaina i pyta "czy to nowość i czy ok?"
                 if self.blockchain.add_transaction(tx):
-                    # poprawna transakcja - rozglaszanie dalej
                     await self.broadcast(raw_msg, exclude=ws)
             except Exception as e:
-                print(f"[Node:{self.port}] Błąd przetwarzania TRANSAKCJI: {e}")
+                print(f"[Node:{self.port}] Błąd TX: {e}")
 
         elif t == "NEW_BLOCK":
             try:
                 block = Block.from_dict(data)
-                # sprawdzenie czy mamy ten blok
-                if block.hash == self.blockchain.get_latest_block().hash:
-                    return 
-                
+                # Node przekazuje blok do weryfikacji i dodania
                 if self.blockchain.add_block(block):
-                    # rozglaszanie poprawnego bloku
                     await self.broadcast(raw_msg, exclude=ws)
             except Exception as e:
-                print(f"[Node:{self.port}] Błąd przetwarzania NOWEGO BLOKU: {e}")
+                print(f"[Node:{self.port}] Błąd BLOCK: {e}")
         
         elif t == "GET_CHAIN":
-            # ktos prosi o lancuch - wysylamy
             await self.send_chain(ws)
             
         elif t == "CHAIN":
-            # otrzymanie pelnego lancucha od peera
-            self.handle_received_chain(data)
-
-        elif t == "PING":
-            await ws.send(json.dumps({"type": "PONG"}))
-        elif t == "PONG":
-            pass
-        else:
-            print(f"[Node:{self.port}] Nieznany typ wiadomości: {t}")
+            # Cała logika "najdłuższy wygrywa" jest teraz w blockchain.replace_chain
+            if self.blockchain.replace_chain(data):
+                # Jeśli wymieniliśmy łańcuch, możemy opcjonalnie rozgłosić to dalej,
+                # ale zazwyczaj to węzły same pytają o łańcuch.
+                pass
 
     async def broadcast(self, message: str, exclude=None):
-        """Rozgłasza wiadomość do wszystkich połączonych peerów."""
-        # Kopiujemy listę, na wypadek gdyby self.connections zmieniło się w trakcie
         for conn in list(self.connections):
             if conn is exclude:
                 continue
             try:
                 await conn.send(message)
             except Exception:
-                # Peer mógł się rozłączyć
                 pass
 
     async def miner_loop(self):
-        """Pętla dla górnika - próbuje kopać nowy blok co 10 sekund."""
         while True:
             await asyncio.sleep(10)
             
+            # Decyzję czy kopać podejmuje Node (lub logika biznesowa), 
+            # ale wykonanie jest w blockchain.
             if not self.blockchain.pending_transactions:
-                # print("[Miner] No transactions to mine.")
                 continue
                 
             print(f"[Miner:{self.port}] Próba wykopania nowego bloku...")
@@ -201,65 +174,27 @@ class Node:
                 await self.broadcast(json.dumps(msg))
 
     async def send_chain(self, ws):
-        """Wysyła pełny łańcuch bloków do danego websocket."""
         try:
-            chain_data = [block.to_dict() for block in self.blockchain.chain]
+            # Pobieramy dane z blockchaina
+            chain_data = self.blockchain.get_chain_dict()
             msg = {"type": "CHAIN", "data": chain_data}
             await ws.send(json.dumps(msg))
         except Exception as e:
             print(f"[Node:{self.port}] Błąd wysyłania łańcucha: {e}")
 
-    def handle_received_chain(self, chain_data: List[Dict[str, Any]]):
-        """
-        Obsługuje otrzymany łańcuch. Implementuje prostą zasadę "najdłuższy łańcuch wygrywa".
-        """
-        if len(chain_data) <= len(self.blockchain.chain):
-            # print(f"[Node:{self.port}] Otrzymany łańcuch nie jest dłuższy. Ignorowanie.")
-            return
-            
-        print(f"[Node:{self.port}] Otrzymano dłuższy łańcuch. Weryfikacja...")
-        
-        # testowy lancuch
-        temp_blockchain = Blockchain()
-        temp_blockchain.chain = [] # usuniecie genesis blocku
-        
-        try:
-            for i, block_data in enumerate(chain_data):
-                block = Block.from_dict(block_data)
-                
-                if i == 0:
-                    # sprawdzenie genesis bloku
-                    if block.index != 0 or block.previous_hash != "0":
-                        raise ValueError("Invalid Genesis Block")
-                    temp_blockchain.chain.append(block)
-                else:
-                    # weryfikacja dalszych blokow
-                    if not temp_blockchain.add_block(block):
-                        raise ValueError(f"Niepoprawny blok #{block.index} w otrzymanym łańcuchu.")
-            
-            # zastapienie lancucha dluzszym nowym jesli jest poprawny
-            self.blockchain = temp_blockchain
-            print(f"[Node:{self.port}] Zamieniono lokalny łańcuch na nowy, poprawny. Długość: {len(self.blockchain.chain)}")
-            
-        except Exception as e:
-            print(f"[Node:{self.port}] Otrzymany łańcuch jest niepoprawny: {e}. Ignorowanie.")
-
-
     async def run(self):
         await self.start_server()
-        await asyncio.sleep(0.5) # wstrzymujemy serwer na chwile
+        await asyncio.sleep(0.5)
         await self.connect_to_peers()
         
         if self.is_miner:
-            # petla gornika w tle
             asyncio.create_task(self.miner_loop())
             
         api_port = self.port + 1000
-        
         api_thread = Thread(
             target=run_flask_app, 
             args=(self.flask_app, api_port), 
-            daemon=True  # watek zamyka sie razem z programem
+            daemon=True
         )
         api_thread.start()
 
@@ -270,31 +205,24 @@ async def main():
         sys.exit(1)
 
     port = int(sys.argv[1])
-    
     is_miner = False
     miner_address = None
     peers_start_index = 2
 
     if "--miner" in sys.argv:
         try:
-            miner_flag_index = sys.argv.index("--miner")
-            miner_address = sys.argv[miner_flag_index + 1]
+            idx = sys.argv.index("--miner")
+            miner_address = sys.argv[idx + 1]
             is_miner = True
-            peers_start_index = miner_flag_index + 2
-            print(f"Startuję jako GÓRNIK. Adres na nagrody: {miner_address}")
+            peers_start_index = idx + 2
+            print(f"Startuję jako GÓRNIK. Adres: {miner_address}")
         except IndexError:
-            print("Błąd: flaga --miner musi być zakończona adresem.")
             sys.exit(1)
             
     peers = sys.argv[peers_start_index:]
-
     node = Node(port=port, peers=peers, is_miner=is_miner, miner_address=miner_address)
-
     await node.run()
-
-    print(f"[Node:{port}] Uruchomiony. Znani peerzy: {peers}")
     await asyncio.Future()
-
 
 if __name__ == "__main__":
     asyncio.run(main())
