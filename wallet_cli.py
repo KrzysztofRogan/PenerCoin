@@ -6,6 +6,7 @@ import sys
 import websockets
 import time
 import hashlib
+import urllib.request
 from penercoin_hd import HDWallet
 
 PASSWORD = "notsecret!"
@@ -36,18 +37,44 @@ def get_wallet() -> HDWallet:
         print(f"Zapisano do: {KEYSTORE_PATH}")
         return wallet
 
-async def send_transaction(wallet: HDWallet, node_url: str, recipient: str, amount: int):
-    # pierwszy adres jako adres nadawcy
+# W wallet_cli.py
+
+async def send_transaction(wallet: HDWallet, node_ws_url: str, recipient: str, amount: int):
     sender_path = "m/0/0"
     sender_address = wallet.get_address(sender_path)
     
     print(f"Nadawca: {sender_address}")
     
-    # przygotowanie danych transakcji
+    # 1. Pobierz aktualny NONCE z API HTTP węzła
+    # Zakładamy, że API HTTP jest na porcie WS + 1000 (tak jest w node.py)
+    try:
+        # Parsowanie adresu URL, np. ws://localhost:6700 -> http://localhost:7700
+        from urllib.parse import urlparse
+        parsed = urlparse(node_ws_url)
+        host = parsed.hostname
+        ws_port = parsed.port
+        if not ws_port: ws_port = 80 # fallback
+        
+        api_port = ws_port + 1000
+        api_url = f"http://{host}:{api_port}/nonce/{sender_address}"
+        
+        print(f"[Wallet] Pobieranie nonce z {api_url}...")
+        with urllib.request.urlopen(api_url) as response:
+            data = json.loads(response.read().decode())
+            nonce = data['nonce']
+            print(f"[Wallet] Otrzymano Nonce: {nonce}")
+
+    except Exception as e:
+        print(f"[Wallet] Błąd pobierania nonce: {e}")
+        print("Upewnij się, że węzeł działa i API HTTP jest dostępne.")
+        return
+
+# dodano nonce
     tx_data = {
         "from": sender_address,
         "to": recipient,
         "amount": amount,
+        "nonce": nonce,   
         "timestamp": time.time()
     }
     
@@ -65,9 +92,9 @@ async def send_transaction(wallet: HDWallet, node_url: str, recipient: str, amou
     
     message = json.dumps({"type": "TRANSACTION", "data": full_tx_payload})
 
-    print(f"[Wallet] Łączenie z węzłem {node_url}...")
+    print(f"[Wallet] Łączenie z węzłem {node_ws_url}...")
     try:
-        async with websockets.connect(node_url) as ws:
+        async with websockets.connect(node_ws_url) as ws:
             await ws.send(message)
             print(f"[Wallet] Transakcja wysłana pomyślnie!")
             print(json.dumps(tx_data, indent=2))

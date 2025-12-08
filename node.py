@@ -67,6 +67,16 @@ class Node:
                 "address": address,
                 "balance": balance
             })
+        
+        @app.route('/nonce/<address>', methods=['GET'])
+        def get_nonce_endpoint(address):
+            # Pobieramy nonce uwzględniający mempool, 
+            # żeby portfel mógł słać seriami
+            nonce = self.blockchain.get_nonce(address)
+            return jsonify({
+                "address": address,
+                "nonce": nonce
+            })
             
         return app
 
