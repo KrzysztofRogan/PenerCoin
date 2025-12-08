@@ -10,13 +10,10 @@ import urllib.request
 from penercoin_hd import HDWallet
 
 PASSWORD = "notsecret!"
-# Domyślna nazwa, jeśli nie podasz flagi -w
-KEYSTORE_PATH = "my_wallet.json" 
+KEYSTORE_PATH = "my_wallet.json"  # jak sie nie doda flagi -w
 DEFAULT_NODE_URL = "ws://localhost:6700"
 
 def get_wallet() -> HDWallet:
-    """Wczytuje portfel z pliku zdefiniowanego w KEYSTORE_PATH."""
-    # Używamy globalnej zmiennej, która mogła zostać zmieniona przez argumenty
     global KEYSTORE_PATH
     
     if os.path.exists(KEYSTORE_PATH):
@@ -37,7 +34,6 @@ def get_wallet() -> HDWallet:
         print(f"Zapisano do: {KEYSTORE_PATH}")
         return wallet
 
-# W wallet_cli.py
 
 async def send_transaction(wallet: HDWallet, node_ws_url: str, recipient: str, amount: int):
     sender_path = "m/0/0"
@@ -45,10 +41,8 @@ async def send_transaction(wallet: HDWallet, node_ws_url: str, recipient: str, a
     
     print(f"Nadawca: {sender_address}")
     
-    # 1. Pobierz aktualny NONCE z API HTTP węzła
-    # Zakładamy, że API HTTP jest na porcie WS + 1000 (tak jest w node.py)
+
     try:
-        # Parsowanie adresu URL, np. ws://localhost:6700 -> http://localhost:7700
         from urllib.parse import urlparse
         parsed = urlparse(node_ws_url)
         host = parsed.hostname
@@ -69,7 +63,7 @@ async def send_transaction(wallet: HDWallet, node_ws_url: str, recipient: str, a
         print("Upewnij się, że węzeł działa i API HTTP jest dostępne.")
         return
 
-# dodano nonce
+# nonce w transakcji jako identyfikator przed double spending
     tx_data = {
         "from": sender_address,
         "to": recipient,
@@ -117,22 +111,17 @@ def generate_new_address(wallet: HDWallet):
 async def main_cli():
     global KEYSTORE_PATH
 
-    # --- NOWA LOGIKA OBSŁUGI PLIKÓW ---
-    # Sprawdzamy czy użytkownik podał flagę -w <plik>
+
     if "-w" in sys.argv:
         try:
             idx = sys.argv.index("-w")
-            # Pobieramy nazwę pliku
             custom_path = sys.argv[idx + 1]
             KEYSTORE_PATH = custom_path
-            
-            # Usuwamy -w i nazwę pliku z listy argumentów, 
-            # żeby reszta kodu (sys.argv[1] itp.) działała po staremu
+
             del sys.argv[idx:idx+2]
         except IndexError:
             print("Błąd: Flaga -w wymaga podania nazwy pliku (np. -w alicja.json)")
             sys.exit(1)
-    # -----------------------------------
 
     if len(sys.argv) < 2:
         print("Użycie: python wallet_cli.py [-w plik.json] <komenda>")

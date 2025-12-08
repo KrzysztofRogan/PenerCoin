@@ -10,7 +10,6 @@ from flask import Flask, jsonify
 from blockchain import Blockchain, Transaction, Block
 
 def run_flask_app(app, port):
-    """Uruchamia serwer Flask na podanym porcie."""
     log = logging.getLogger('werkzeug')
     log.setLevel(logging.ERROR)
     print(f"[API] Serwer HTTP API uruchomiony na http://localhost:{port}")
@@ -24,7 +23,7 @@ class Node:
         self.server = None
         self.connections = set()
         
-        # Inicjalizacja Blockchaina (cała logika jest wewnątrz)
+        # kazdy node odpala swoja instancje blockchaina
         self.blockchain = Blockchain()
         
         self.is_miner = is_miner
@@ -70,8 +69,7 @@ class Node:
         
         @app.route('/nonce/<address>', methods=['GET'])
         def get_nonce_endpoint(address):
-            # Pobieramy nonce uwzględniający mempool, 
-            # żeby portfel mógł słać seriami
+            # nonce uwzglednia mempool
             nonce = self.blockchain.get_nonce(address)
             return jsonify({
                 "address": address,
@@ -129,7 +127,7 @@ class Node:
         if t == "TRANSACTION":
             try:
                 tx = Transaction.from_dict(data)
-                # Node tylko przekazuje do blockchaina i pyta "czy to nowość i czy ok?"
+                # przekazanie transakcji do blockccchaina
                 if self.blockchain.add_transaction(tx):
                     await self.broadcast(raw_msg, exclude=ws)
             except Exception as e:
@@ -138,7 +136,7 @@ class Node:
         elif t == "NEW_BLOCK":
             try:
                 block = Block.from_dict(data)
-                # Node przekazuje blok do weryfikacji i dodania
+                # tu przekazanie bloku do weryfikacji
                 if self.blockchain.add_block(block):
                     await self.broadcast(raw_msg, exclude=ws)
             except Exception as e:
@@ -148,11 +146,9 @@ class Node:
             await self.send_chain(ws)
             
         elif t == "CHAIN":
-            # Cała logika "najdłuższy wygrywa" jest teraz w blockchain.replace_chain
+            # sprawdzenie logiki dluzszego chaina
             if self.blockchain.replace_chain(data):
-                # Jeśli wymieniliśmy łańcuch, możemy opcjonalnie rozgłosić to dalej,
-                # ale zazwyczaj to węzły same pytają o łańcuch.
-                pass
+                pass # pass zamiast broadcast bo nody same pytaja o chaina
 
     async def broadcast(self, message: str, exclude=None):
         for conn in list(self.connections):
@@ -166,9 +162,7 @@ class Node:
     async def miner_loop(self):
         while True:
             await asyncio.sleep(10)
-            
-            # Decyzję czy kopać podejmuje Node (lub logika biznesowa), 
-            # ale wykonanie jest w blockchain.
+
             if not self.blockchain.pending_transactions:
                 continue
                 
@@ -185,7 +179,6 @@ class Node:
 
     async def send_chain(self, ws):
         try:
-            # Pobieramy dane z blockchaina
             chain_data = self.blockchain.get_chain_dict()
             msg = {"type": "CHAIN", "data": chain_data}
             await ws.send(json.dumps(msg))

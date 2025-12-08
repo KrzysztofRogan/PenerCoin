@@ -5,8 +5,8 @@ from typing import List, Dict, Any, Optional
 from penercoin_hd import HDWallet
 
 GENESIS_ADDRESS = "3c11462c3732dad03e284f3dd8b862c3cd1ce2f4"
-PREMINE_AMOUNT = 1000000  # Milion monet na start
-MINING_REWARD = 50        # Nagroda za każdy kolejny blok
+PREMINE_AMOUNT = 1000000  
+MINING_REWARD = 50        
 
 class Transaction:
     def __init__(self, tx_data: Dict[str, Any], signature: str, sender_pubkey: str):
@@ -22,7 +22,7 @@ class Transaction:
     def is_valid(self) -> bool:
         sender = self.tx_data.get("from")
         amount = self.tx_data.get("amount")
-        # Transakcja systemowa (Coinbase) jest zawsze ważna
+        
         if sender == "COINBASE":
             if amount != MINING_REWARD:
                 return False
@@ -30,6 +30,9 @@ class Transaction:
                 return False
             if self.signature != "":
                 return False
+            
+        if amount < 0 or type(amount) is not int:
+            return False
             
             
         if not self.signature or not self.sender_pubkey:
@@ -96,27 +99,22 @@ class Block:
 
 class Blockchain:
     def __init__(self):
-        # Tutaj następuje inicjalizacja. create_genesis_block() użyje GENESIS_ADDRESS
         self.chain: List[Block] = [self.create_genesis_block()]
         self.pending_transactions: List[Transaction] = []
-        self.difficulty = 2 
+        self.difficulty = 3
 
     def create_genesis_block(self) -> Block:
-        """
-        Tworzy pierwszy blok.
-        Przypisuje początkowe środki do GENESIS_ADDRESS.
-        """
         genesis_tx_data = {
             "from": "COINBASE",
             "to": GENESIS_ADDRESS,
             "amount": PREMINE_AMOUNT,
-            "timestamp": 0  # Stały czas dla determinizmu
+            "timestamp": 0
         }
         
-        # Tworzymy transakcję bez podpisu (Coinbase nie wymaga podpisu)
+
         genesis_tx = Transaction(genesis_tx_data, signature="", sender_pubkey="")
         
-        # Genesis Block zawsze ma timestamp 0 i previous_hash "0"
+
         return Block(index=0, timestamp=0, transactions=[genesis_tx], previous_hash="0")
 
     def get_latest_block(self) -> Block:
@@ -141,18 +139,12 @@ class Blockchain:
         return balance
     
     def get_nonce(self, address: str) -> int:
-        """
-        Zwraca następny oczekiwany nonce dla adresu.
-        Suma transakcji w łańcuchu + transakcji wiszących w mempoolu.
-        """
         count = 0
-        # 1. Policz transakcje zatwierdzone w blokach
         for block in self.chain:
             for tx in block.transactions:
                 if tx.tx_data.get('from') == address:
                     count += 1
-        
-        # 2. Dolicz transakcje wiszące w mempoolu
+
         for tx in self.pending_transactions:
             if tx.tx_data.get('from') == address:
                 count += 1
@@ -160,7 +152,6 @@ class Blockchain:
         return count
     
     def get_confirmed_nonce(self, address: str, up_to_index: int = None) -> int:
-        """Zwraca nonce TYLKO z łańcucha (używane przy walidacji bloków)."""
         count = 0
         limit = up_to_index if up_to_index is not None else len(self.chain)
         for i in range(limit):
@@ -171,49 +162,42 @@ class Blockchain:
         return count
     
     def add_transaction(self, transaction: Transaction) -> bool:
-        sender = transaction.tx_data['from']
-        amount = transaction.tx_data['amount']
+        sender = transaction.tx_data.get('from')
+        amount = transaction.tx_data.get('amount')
         tx_nonce = transaction.tx_data.get('nonce')
 
-        if sender == "COINBASE": return False # Coinbase tylko przez mining
+        if sender == "COINBASE": return False
 
-        # 1. Sprawdź czy nonce istnieje
-        if tx_nonce is None:
-            print(f"[Blockchain] Odrzucono: Brak nonce")
-            return False
 
-        # 2. Sprawdź poprawność Nonce (musi być równy temu co mamy w bazie + mempoolu)
-        expected_nonce = self.get_nonce(sender)
-        # UWAGA: Tutaj uproszczenie - w idealnym świecie sprawdzamy czy nonce > confirmed_nonce,
-        # ale dla prostoty sprawdzamy czy pasuje idealnie do kolejki.
-        if tx_nonce != expected_nonce:
-            print(f"[Blockchain] Błąd Nonce dla {sender}: Jest {tx_nonce}, oczekiwano {expected_nonce}")
-            return False
-
-        # 3. Sprawdź duplikaty (po hashu)
         if transaction.tx_hash in [t.tx_hash for t in self.pending_transactions]:
-            return False
+            return False 
+        
+        for block in self.chain:
+            for tx in block.transactions:
+                if tx.tx_hash == transaction.tx_hash:
+                    return False
 
-        # 4. Weryfikacja kryptograficzna
         if not transaction.is_valid():
-            print(f"[Blockchain] Błąd: Nieprawidłowy podpis")
+            print(f"[Mempool Error] Błąd walidacji transakcji")
             return False
             
-        # 5. Weryfikacja salda (wliczając pending)
+        expected_nonce = self.get_nonce(sender)
+        if tx_nonce != expected_nonce:
+            print(f"[Mempool Error] Błąd Nonce dla {sender}: Jest {tx_nonce}, oczekiwano {expected_nonce}")
+            return False
+
         current_balance = self.get_balance(sender)
-        pending_spend = sum(tx.tx_data['amount'] for tx in self.pending_transactions if tx.tx_data['from'] == sender)
+        pending_spend = sum(t.tx_data['amount'] for t in self.pending_transactions if t.tx_data['from'] == sender)
         
         if current_balance < (amount + pending_spend):
-            print(f"[Blockchain] Brak środków.")
+            print(f"[Mempool Error] Brak środków. Ma: {current_balance}, Pending: {pending_spend}, Chce: {amount}")
             return False
         
         self.pending_transactions.append(transaction)
-        print(f"[Blockchain] Transakcja dodana (Nonce: {tx_nonce}). Mempool: {len(self.pending_transactions)}")
+        print(f"[Mempool] Transakcja dodana (Nonce: {tx_nonce}). Oczekujących: {len(self.pending_transactions)}")
         return True
-       
 
     def mine_pending_transactions(self, miner_address: str) -> Optional[Block]:
-        # Tworzymy nagrodę dla górnika
         coinbase_tx_data = {
             "from": "COINBASE",
             "to": miner_address,
@@ -221,12 +205,6 @@ class Blockchain:
             "timestamp": time.time()
         }
         coinbase_tx = Transaction(coinbase_tx_data, signature="", sender_pubkey="")
-        
-        # Selekcja transakcji:
-        # W modelu konta jest łatwiej niż w UTXO. Musimy tylko sprawdzić, 
-        # czy po dodaniu transakcji do bloku saldo nie spadnie poniżej zera.
-        # W uproszczonej wersji, skoro add_transaction już to sprawdziło, 
-        # bierzemy wszystko co jest w mempoolu.
         
         block_transactions = [coinbase_tx] + self.pending_transactions
 
@@ -241,7 +219,7 @@ class Blockchain:
         new_block.hash = self.proof_of_work(new_block)
         
         self.chain.append(new_block)
-        self.pending_transactions = [] # Czyścimy kolejkę
+        self.pending_transactions = [] 
         
         return new_block
 
@@ -256,12 +234,11 @@ class Blockchain:
             
         return computed_hash
     
+    # sprawdzamy kazda transakcje w dodawanym bloku
     def verify_block_transactions(self, block: Block) -> bool:
-        """Zaawansowana weryfikacja transakcji w bloku (Stateful)"""
         temp_balance_changes = {}
-        temp_nonce_tracker = {} # Śledzenie nonce wewnątrz bloku
+        temp_nonce_tracker = {}
 
-        # 1. Walidacja Coinbase
         if not block.transactions: return False
         if block.transactions[0].tx_data.get("from") != "COINBASE": return False
         
@@ -269,7 +246,6 @@ class Blockchain:
             sender = tx.tx_data.get("from")
             amount = tx.tx_data.get("amount")
             
-            # Coinbase musi być tylko na indeksie 0
             if sender == "COINBASE":
                 if i != 0: return False
                 continue
@@ -277,10 +253,8 @@ class Blockchain:
             tx_nonce = tx.tx_data.get("nonce")
             if tx_nonce is None: return False
 
-            # --- WALIDACJA NONCE ---
-            # Jaki jest nonce w bazie (przed tym blokiem)?
+
             confirmed_nonce = self.get_confirmed_nonce(sender, up_to_index=block.index)
-            # Ile razy ten nadawca wystąpił już w TYM bloku?
             nonce_offset = temp_nonce_tracker.get(sender, 0)
             
             expected = confirmed_nonce + nonce_offset
@@ -290,12 +264,10 @@ class Blockchain:
                 return False
             
             temp_nonce_tracker[sender] = nonce_offset + 1
-            # -----------------------
 
             if not tx.is_valid(): return False
 
-            # Walidacja salda
-            current_balance = self.get_balance(sender, up_to_index=block.index) # UWAGA: trzeba dodać parametr up_to_index do get_balance (opis niżej)
+            current_balance = self.get_balance(sender, up_to_index=block.index)
             balance_change = temp_balance_changes.get(sender, 0)
             
             if (current_balance + balance_change) < amount:
@@ -316,7 +288,6 @@ class Blockchain:
         if not new_block.hash.startswith(prefix): return False
         if new_block.hash != new_block.calculate_hash(): return False
 
-        # UŻYWAMY NOWEJ METODY WALIDACJI ZAMIAST STAREJ PĘTLI
         if not self.verify_block_transactions(new_block):
             print("[Blockchain] Blok odrzucony: błąd weryfikacji transakcji (nonce/saldo)")
             return False
@@ -352,8 +323,7 @@ class Blockchain:
                     raise ValueError(f"Invalid link at block {i}")
                 if not block.hash.startswith('0' * self.difficulty):
                     raise ValueError(f"Invalid PoW at block {i}")
-                
-                # Walidacja podpisów transakcji
+                # walidacja podpisow transakcji
                 for tx in block.transactions:
                     if not tx.is_valid():
                         raise ValueError(f"Invalid tx in block {i}")
@@ -381,17 +351,3 @@ class Blockchain:
             if current.previous_hash != prev.hash: return False
         return True
     
-
-    # TO DO:
-    # do sprawdzenia:
-    # czy pierwsza transakcja to coinbase
-    # osobna funkcja walidacji coinbase transactions[0] czy from coinbase czy brak pubkey i signature czy amount sie zgadza
-    # weryfikacja wszystkich kolejych transakcji:
-    # struktura transakcji, czy ma wszystkie pola w odpowiedniej kolejnosci
-    # czy amount jest dodatnie i calkowite
-    # kryptografia.- sprawdzenie podpisu i pubkey za pomoca funkcji z portfela
-    # czy klub publiczny sie zgadza z adresem
-    # czy ta transakcja nie jest duplikatem (sprawdzenie hash czy juz istneije)
-    # double spending - specjalna funkcja do uruchomienia w addblock??? ktora policzy wszystkie from i to dla adresow transakcji i sprawdzi czy stac na nowa transakcje
-
-    # penerkowy albo dynamiczny proof of work
