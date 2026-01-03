@@ -30,6 +30,7 @@ class Transaction:
                 return False
             if self.signature != "":
                 return False
+            return True
             
         if amount < 0 or type(amount) is not int:
             return False
@@ -101,7 +102,8 @@ class Blockchain:
     def __init__(self):
         self.chain: List[Block] = [self.create_genesis_block()]
         self.pending_transactions: List[Transaction] = []
-        self.difficulty = 3
+        self.orphans: List[Block] = []  # <--- NOWOŚĆ: Lista na odrzucone bloki
+        self.difficulty = 5
 
     def create_genesis_block(self) -> Block:
         genesis_tx_data = {
@@ -206,7 +208,7 @@ class Blockchain:
         }
         coinbase_tx = Transaction(coinbase_tx_data, signature="", sender_pubkey="")
         
-        block_transactions = [coinbase_tx] + self.pending_transactions
+        block_transactions = [coinbase_tx] + list(self.pending_transactions)
 
         latest_block = self.get_latest_block()
         new_block = Block(
@@ -218,9 +220,7 @@ class Blockchain:
 
         new_block.hash = self.proof_of_work(new_block)
         
-        self.chain.append(new_block)
-        self.pending_transactions = [] 
-        
+
         return new_block
 
     def proof_of_work(self, block: Block) -> str:
@@ -302,42 +302,59 @@ class Blockchain:
         return True
 
     def replace_chain(self, chain_data: List[Dict[str, Any]]) -> bool:
-        if len(chain_data) <= len(self.chain): return False
-        
-        print(f"[Blockchain] Weryfikacja dłuższego łańcucha...")
-        temp_chain = []
-        
-        try:
-            for i, block_data in enumerate(chain_data):
-                block = Block.from_dict(block_data)
-                
-                if i == 0:
-                    our_genesis = self.create_genesis_block()
-                    if block.calculate_hash() != our_genesis.calculate_hash():
-                        raise ValueError("Invalid Genesis Block hash")
-                    temp_chain.append(block)
-                    continue
+            if len(chain_data) <= len(self.chain): return False
+            
+            print(f"[Blockchain] Weryfikacja dłuższego łańcucha...")
+            temp_chain = []
+            
+            try:
+                for i, block_data in enumerate(chain_data):
+                    block = Block.from_dict(block_data)
+                    
+                    if i == 0:
+                        our_genesis = self.create_genesis_block()
+                        if block.calculate_hash() != our_genesis.calculate_hash():
+                            raise ValueError("Invalid Genesis Block hash")
+                        temp_chain.append(block)
+                        continue
 
-                prev_block = temp_chain[-1]
-                if block.previous_hash != prev_block.hash:
-                    raise ValueError(f"Invalid link at block {i}")
-                if not block.hash.startswith('0' * self.difficulty):
-                    raise ValueError(f"Invalid PoW at block {i}")
-                # walidacja podpisow transakcji
-                for tx in block.transactions:
-                    if not tx.is_valid():
-                        raise ValueError(f"Invalid tx in block {i}")
-                            
-                temp_chain.append(block)
-            
-            self.chain = temp_chain
-            self.pending_transactions = [] 
-            print(f"[Blockchain] Zastąpiono łańcuch. Nowa długość: {len(self.chain)}")
-            return True
-            
-        except Exception as e:
-            print(f"[Blockchain] Odrzucono łańcuch: {e}")
-            return False
+                    prev_block = temp_chain[-1]
+                    if block.previous_hash != prev_block.hash:
+                        raise ValueError(f"Invalid link at block {i}")
+                    if not block.hash.startswith('0' * self.difficulty):
+                        raise ValueError(f"Invalid PoW at block {i}")
+                    
+                    # Walidacja kryptograficzna transakcji
+                    for tx in block.transactions:
+                        if not tx.is_valid():
+                            raise ValueError(f"Invalid tx in block {i}")
+                                
+                    temp_chain.append(block)
+                
+
+                split_index = 0
+                min_len = min(len(self.chain), len(temp_chain))
+                
+                while split_index < min_len and self.chain[split_index].hash == temp_chain[split_index].hash:
+                    split_index += 1
+                
+                orphaned_blocks = self.chain[split_index:]
+                self.orphans.extend(orphaned_blocks)
+                
+                if orphaned_blocks:
+                    print(f"[Blockchain] Znaleziono {len(orphaned_blocks)} osieroconych bloków!")
+
+                self.chain = temp_chain
+                self.pending_transactions = [] 
+                print(f"[Blockchain] Zastąpiono łańcuch. Nowa długość: {len(self.chain)}")
+                return True
+                
+            except Exception as e:
+                print(f"[Blockchain] Odrzucono łańcuch: {e}")
+                return False
+
+    def get_orphans_dict(self) -> List[Dict[str, Any]]:
+        return [block.to_dict() for block in self.orphans]
 
     def is_chain_valid(self) -> bool:
         real_genesis = self.create_genesis_block()

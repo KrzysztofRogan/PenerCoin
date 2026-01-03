@@ -149,7 +149,6 @@ class HDWallet:
     def get_next_index(self, chain: int = 0) -> int:
         return self._get_next_index_for_chain(chain)
 
-    # ---------- keystore ----------
     def save_keystore(self, path: str = None, password: str = None):
         if path is None:
             path = os.path.join(os.getcwd(), "penercoin_keystore.json")
