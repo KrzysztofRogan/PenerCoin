@@ -159,14 +159,30 @@ class Node:
                     print(f"[Node:{self.port}] Błąd TX: {e}")
 
             elif t == "NEW_BLOCK":
-                if getattr(self, 'malicious', False): # Używamy getattr dla bezpieczeństwa, gdyby flagi nie było
-                    print(f"[Malicious] Otrzymałem blok z sieci, ale go IGNORUJĘ, aby wymusić fork.")
+                # Zabezpieczenie: Złośliwy ignoruje wszystko, żeby trzymać swój fork
+                if getattr(self, 'malicious', False):
+                    print(f"[Malicious] Otrzymałem blok, ignoruję.")
                     return
 
                 try:
                     block = Block.from_dict(data)
+                    latest_block = self.blockchain.get_latest_block()
+                    
+                    # 1. Próbujemy dodać blok normalnie (Idealny scenariusz)
                     if self.blockchain.add_block(block):
                         await self.broadcast(raw_msg, exclude=ws)
+                    
+                    # 2. OBSŁUGA FORKA (To czego brakowało!)
+                    # Jeśli add_block się nie udał (bo hash nie pasuje), 
+                    # ALE nowy blok ma wyższy indeks -> to dowód, że ktoś ma dłuższy łańcuch.
+                    elif block.index > latest_block.index:
+                        print(f"[Node:{self.port}] Wykryto dłuższy łańcuch (Mój: {latest_block.index}, Obcy: {block.index}).")
+                        print(f"[Node:{self.port}] Proszę o synchronizację (GET_CHAIN).")
+                        await ws.send(json.dumps({"type": "GET_CHAIN"}))
+                    
+                    else:
+                        print(f"[Node:{self.port}] Otrzymano niepasujący blok #{block.index}. Ignoruję.")
+
                 except Exception as e:
                     print(f"[Node:{self.port}] Błąd BLOCK: {e}")
             
@@ -175,11 +191,12 @@ class Node:
                 
             elif t == "CHAIN":
                 if getattr(self, 'malicious', False):
-                    print(f"[Malicious] Otrzymałem łańcuch, ale go IGNORUJĘ.")
                     return
 
                 if self.blockchain.replace_chain(data):
-                    pass # pass zamiast broadcast bo nody same pytaja o chaina
+                    print(f"[Node] Zaktualizowano łańcuch. Przekazuję dalej do sąsiadów!")
+                    # ZMIANA: Zamiast pass, ślemy dalej!
+                    await self.broadcast(raw_msg, exclude=ws)
 
     async def broadcast(self, message: str, exclude=None):
         for conn in list(self.connections):
@@ -196,21 +213,37 @@ class Node:
         loop = asyncio.get_running_loop()
         
         while True:
+            # 1. Czekamy na transakcje
             if not self.blockchain.pending_transactions:
                 await asyncio.sleep(2)
                 continue
             
-            print(f"[Miner:{self.port}] Rozpoczynam liczenie PoW w tle...")
+            # Zapamiętujemy, nad jakim blokiem zaczynamy pracować
+            current_height = self.blockchain.get_latest_block().index
             
+            print(f"[Miner:{self.port}] Rozpoczynam liczenie PoW dla bloku #{current_height + 1}...")
 
+            # 2. To jest blokująca operacja (trwa np. 10 sekund)
+            # W TYM CZASIE może przyjść blok z sieci i zaktualizować blockchain!
             new_block = await loop.run_in_executor(
                 None, 
                 self.blockchain.mine_pending_transactions, 
                 self.miner_address
             )
             
+            # 3. SPRAWDZENIE PO KOPANIU (Kluczowa Poprawka)
+            latest_height_now = self.blockchain.get_latest_block().index
+            
+            # Jeśli w międzyczasie wysokość łańcucha wzrosła, to znaczy, 
+            # że ktoś nas ubiegł. Nasz wykopany blok jest do śmieci.
+            if latest_height_now >= new_block.index:
+                print(f"[Miner:{self.port}] Ktoś był szybszy! (Indeks z sieci: #{latest_height_now}, Ja kopałem: #{new_block.index}). Porzucam.")
+                # Nie robimy broadcast, po prostu wracamy na początek pętli, 
+                # żeby pobrać nowe transakcje i kopać NASTĘPNY blok.
+                continue
+
+            # 4. Jeśli nadal jesteśmy na bieżąco -> Dodajemy i rozgłaszamy
             if new_block:
-                # probujemy dodac blok
                 if self.blockchain.add_block(new_block):
                     print(f"[Miner:{self.port}] SUKCES! Wykopano blok #{new_block.index}. Rozgłaszanie...")
                     msg = {
@@ -219,9 +252,8 @@ class Node:
                     }
                     await self.broadcast(json.dumps(msg))
                 else:
-                    print(f"[Miner:{self.port}] Blok odrzucony (ktoś był szybszy lub zmienił się stan).")
+                    print(f"[Miner:{self.port}] Blok odrzucony przez walidację.")
             
-            # krotka przerwa na obluzenie innych zdarzen
             await asyncio.sleep(0.1)
 
     async def send_chain(self, ws):

@@ -102,8 +102,8 @@ class Blockchain:
     def __init__(self):
         self.chain: List[Block] = [self.create_genesis_block()]
         self.pending_transactions: List[Transaction] = []
-        self.orphans: List[Block] = []  # <--- NOWOŚĆ: Lista na odrzucone bloki
-        self.difficulty = 5
+        self.orphans: List[Block] = [] 
+        self.difficulty = 6
 
     def create_genesis_block(self) -> Block:
         genesis_tx_data = {
